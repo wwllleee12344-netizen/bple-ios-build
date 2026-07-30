@@ -1,0 +1,59 @@
+publishing:
+  email:
+    recipients:
+      - dontclickgmai29@gmail.com
+
+workflows:
+  unity-ios:
+    name: Unity iOS Build
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+    scripts:
+      - name: Extract Project Files
+        script: |
+          set -e
+          cd $CM_BUILD_DIR
+          unzip -o BPLE-2022.1.2.zip -d extracted_project
+      - name: Fix Bundle Version Formatting
+        script: |
+          set -e
+          cd $CM_BUILD_DIR/extracted_project/BPLE-2022.1.2
+          
+          # Force fix the Info.plist file to remove invalid characters
+          PLIST_PATH="Info.plist"
+          if [ ! -f "$PLIST_PATH" ]; then
+            PLIST_PATH="Unity-iPhone/Info.plist"
+          fi
+          
+          if [ -f "$PLIST_PATH" ]; then
+            echo "Modifying Info.plist version strings to clear Xcode rules..."
+            sed -i '' 's/2022.1-2/2022.1.2/g' "$PLIST_PATH"
+          fi
+      - name: Build iOS App (.ipa)
+        script: |
+          set -e
+          cd $CM_BUILD_DIR/extracted_project/BPLE-2022.1.2
+          
+          # Compile native mobile assets
+          xcodebuild build \
+            -project "Unity-iPhone.xcodeproj" \
+            -scheme "Unity-iPhone" \
+            -configuration Release \
+            -sdk iphoneos \
+            CONFIGURATION_BUILD_DIR="$CM_BUILD_DIR/output" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER=""
+          
+          # Package the built .app into an .ipa file
+          mkdir -p $CM_BUILD_DIR/output/Payload
+          mkdir -p $CM_BUILD_DIR/build
+          cp -R $CM_BUILD_DIR/output/Unity.app $CM_BUILD_DIR/output/Payload/
+          cd $CM_BUILD_DIR/output
+          zip -r $CM_BUILD_DIR/build/BPLE.ipa Payload
+          
+          # Clean up temporary Payload folder
+          rm -rf $CM_BUILD_DIR/output/Payload
+    artifacts:
+      - build/*.ipa
