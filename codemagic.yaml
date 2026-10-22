@@ -1,8 +1,3 @@
-publishing:
-  email:
-    recipients:
-      - dontclickgmai29@gmail.com
-
 workflows:
   unity-ios:
     name: Unity iOS Build
@@ -13,29 +8,33 @@ workflows:
         script: |
           set -e
           cd $CM_BUILD_DIR
-          # 7za is pre-installed on Codemagic macOS instances to handle 7z archives
           7za x BPLE-2022.1.4.7z -oextracted_project
       - name: Fix Bundle Version Formatting
         script: |
           set -e
-          cd $CM_BUILD_DIR/extracted_project/BPLE-2022.1.4
+          # Dynamically locate the Info.plist inside the extracted contents
+          TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
+          cd "$TARGET_DIR"
           
-          # Force fix the Info.plist file to remove invalid characters
           PLIST_PATH="Info.plist"
           if [ ! -f "$PLIST_PATH" ]; then
             PLIST_PATH="Unity-iPhone/Info.plist"
           fi
           
           if [ -f "$PLIST_PATH" ]; then
-            echo "Modifying Info.plist version strings to clear Xcode rules..."
+            echo "Modifying Info.plist architecture values..."
+            # Clean up the exact naming variation for version strings
             sed -i '' 's/2022.1-4/2022.1.4/g' "$PLIST_PATH"
           fi
       - name: Build iOS App (.ipa)
         script: |
           set -e
-          cd $CM_BUILD_DIR/extracted_project/BPLE-2022.1.4
+          TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
+          cd "$TARGET_DIR"
           
-          # Compile native mobile assets
+          # Clean output target directories 
+          mkdir -p $CM_BUILD_DIR/output
+          
           xcodebuild build \
             -project "Unity-iPhone.xcodeproj" \
             -scheme "Unity-iPhone" \
@@ -47,14 +46,12 @@ workflows:
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER=""
           
-          # Package the built .app into an .ipa file
+          # Zip and wrap the compiled bundle binary
           mkdir -p $CM_BUILD_DIR/output/Payload
           mkdir -p $CM_BUILD_DIR/build
-          cp -R $CM_BUILD_DIR/output/Unity.app $CM_BUILD_DIR/output/Payload/
+          cp -R $CM_BUILD_DIR/output/Unity-iPhone.app $CM_BUILD_DIR/output/Payload/ 2>/dev/null || cp -R $CM_BUILD_DIR/output/*.app $CM_BUILD_DIR/output/Payload/
           cd $CM_BUILD_DIR/output
           zip -r $CM_BUILD_DIR/build/BPLE.ipa Payload
-          
-          # Clean up temporary Payload folder
           rm -rf $CM_BUILD_DIR/output/Payload
     artifacts:
       - build/*.ipa
