@@ -9,80 +9,84 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m1
     scripts:
-      - name: Extract and Build iOS App
+      - name: Download Project Files from Google Drive
         script: |
-          set -euo pipefail
-          EXTRACT_DIR="$CM_BUILD_DIR/extracted_project"
-          OUTPUT_DIR="$CM_BUILD_DIR/output"
-          ARCHIVE_PATH="$(find "$CM_BUILD_DIR" -type f -name 'BPLE-2022.1.4.7z' -print -quit)"
-          if [ -z "$ARCHIVE_PATH" ]; then
-            ARCHIVE_PATH="$(find "$CM_BUILD_DIR" -type f -name 'BPLE-2022.1.4.zip' -print -quit)"
+          set -e
+          cd $CM_BUILD_DIR
+          echo "Downloading project archive directly from Google Drive..."
+          
+          # Automated authentication handshake to bypass Google Drive's safety splash wall
+          curl -L -c cookies.txt "https://google.com" > /dev/null
+          CONFIRM_CODE=$(grep -o 'confirm=[^&]*' cookies.txt | cut -d= -f2 || echo "")
+          
+          if [ -n "$CONFIRM_CODE" ]; then
+            curl -L -b cookies.txt "https://google.com{CONFIRM_CODE}&id=1LmTQBRjwbp0BrDxHeNFiq2V9QNfKxsbu" -o BPLE-2022.1.4.7z
+          else
+            curl -L "https://google.com" -o BPLE-2022.1.4.7z
           fi
-          if [ -z "$ARCHIVE_PATH" ]; then
-            echo "Could not find BPLE-2022.1.4.7z or BPLE-2022.1.4.zip in the build directory."
-            exit 1
+          rm -f cookies.txt
+          
+          echo "Extracting project files..."
+          7za x BPLE-2022.1.4.7z -oextracted_project
+      - name: Fix Bundle Version Formatting
+        script: |
+          set -e
+          TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
+          cd "$TARGET_DIR"
+          
+          PLIST_PATH="Info.plist"
+          if [ ! -f "$PLIST_PATH" ]; then
+            PLIST_PATH="Unity-iPhone/Info.plist"
           fi
-
-          mkdir -p "$EXTRACT_DIR"
-          case "$ARCHIVE_PATH" in
-            *.7z)
-              if ! command -v 7zz >/dev/null 2>&1 && ! command -v 7z >/dev/null 2>&1; then
-                brew install sevenzip
-              fi
-              if command -v 7zz >/dev/null 2>&1; then
-                7zz x -y "-o$EXTRACT_DIR" "$ARCHIVE_PATH"
-              else
-                7z x -y "-o$EXTRACT_DIR" "$ARCHIVE_PATH"
-              fi
-              ;;
-            *.zip)
-              unzip -o "$ARCHIVE_PATH" -d "$EXTRACT_DIR"
-              ;;
-          esac
-
-          PROJECT_FILE="$(find "$EXTRACT_DIR" -type d -name Unity-iPhone.xcodeproj -print -quit)"
-          if [ -z "$PROJECT_FILE" ]; then
-            echo "Archive does not contain a Unity-iPhone.xcodeproj."
-            exit 1
+          
+          if [ -f "$PLIST_PATH" ]; then
+            echo "Modifying Info.plist version strings to clear Xcode rules..."
+            sed -i '' 's/2022.1-4/2022.1.4/g' "$PLIST_PATH"
           fi
-          PROJECT_DIR="$(dirname "$PROJECT_FILE")"
-
-          for library in \
-            "$PROJECT_DIR/Libraries/libiPhone-lib.a" \
-            "$PROJECT_DIR/Libraries/libil2cpp.a" \
-            "$PROJECT_DIR/Libraries/baselib.a"; do
-            if [ ! -s "$library" ]; then
-              echo "Required iOS library is missing or empty: $library"
-              exit 1
-            fi
-            first_line="$(head -n 1 "$library")"
-            if [ "$first_line" = "version https://git-lfs.github.com/spec/v1" ]; then
-              echo "Archive contains a Git LFS pointer instead of the actual library: $library"
-              echo "Download the LFS objects before creating and uploading the archive."
-              exit 1
-            fi
-          done
-
+      - name: Install Pod Dependencies
+        script: |
+          set -e
+          TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
+          cd "$TARGET_DIR"
+          
+          if [ -f "Podfile" ]; then
+            echo "Podfile found. Installing CocoaPods modules..."
+            pod install --repo-update
+          else
+            echo "No explicit Podfile found. Skipping step..."
+          fi
+      - name: Build iOS App (.ipa)
+        script: |
+          set -e
+          TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
+          cd "$TARGET_DIR"
+          
+          mkdir -p $CM_BUILD_DIR/output
+          
+          BUILD_TARGET="-project Unity-iPhone.xcodeproj"
+          if [ -d "Unity-iPhone.xcworkspace" ]; then
+            BUILD_TARGET="-workspace Unity-iPhone.xcworkspace"
+          fi
+          
+          echo "Compiling native iOS frameworks using target: $BUILD_TARGET"
+          
           xcodebuild build \
-            -project "$PROJECT_FILE" \
+            $BUILD_TARGET \
             -scheme "Unity-iPhone" \
             -configuration Release \
             -sdk iphoneos \
-            CONFIGURATION_BUILD_DIR="$OUTPUT_DIR" \
+            CONFIGURATION_BUILD_DIR="$CM_BUILD_DIR/output" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER=""
-
-          APP_PATH="$(find "$OUTPUT_DIR" -type d -name '*.app' -print -quit)"
-          if [ -z "$APP_PATH" ]; then
-            echo "Xcode build succeeded but did not produce an .app in $OUTPUT_DIR."
-            exit 1
-          fi
-
-          mkdir -p "$OUTPUT_DIR/Payload" "$CM_BUILD_DIR/build"
-          cp -R "$APP_PATH" "$OUTPUT_DIR/Payload/"
-          (cd "$OUTPUT_DIR" && zip -r "$CM_BUILD_DIR/build/BPLE.ipa" Payload)
-          rm -rf "$OUTPUT_DIR/Payload"
+          
+          # Package the built .app binary into an exportable .ipa container
+          mkdir -p $CM_BUILD_DIR/output/Payload
+          mkdir -p $CM_BUILD_DIR/build
+          cp -R $CM_BUILD_DIR/output/Unity-iPhone.app $CM_BUILD_DIR/output/Payload/ 2>/dev/null || cp -R $CM_BUILD_DIR/output/*.app $CM_BUILD_DIR/output/Payload/
+          cd $CM_BUILD_DIR/output
+          zip -r $CM_BUILD_DIR/build/BPLE.ipa Payload
+          rm -rf $CM_BUILD_DIR/output/Payload
     artifacts:
       - build/*.ipa
