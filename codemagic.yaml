@@ -1,3 +1,8 @@
+publishing:
+  email:
+    recipients:
+      - dontclickgmai29@gmail.com
+
 workflows:
   unity-ios:
     name: Unity iOS Build
@@ -12,7 +17,6 @@ workflows:
       - name: Fix Bundle Version Formatting
         script: |
           set -e
-          # Dynamically locate the Info.plist inside the extracted contents
           TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
           cd "$TARGET_DIR"
           
@@ -22,9 +26,21 @@ workflows:
           fi
           
           if [ -f "$PLIST_PATH" ]; then
-            echo "Modifying Info.plist architecture values..."
-            # Clean up the exact naming variation for version strings
+            echo "Modifying Info.plist version strings to clear Xcode rules..."
             sed -i '' 's/2022.1-4/2022.1.4/g' "$PLIST_PATH"
+          fi
+      - name: Install Pod Dependencies
+        script: |
+          set -e
+          TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
+          cd "$TARGET_DIR"
+          
+          # Initialize and pull missing dependencies required for Unity framework setups
+          if [ -f "Podfile" ]; then
+            echo "Podfile found. Installing CocoaPods modules..."
+            pod install --repo-update
+          else
+            echo "No explicit Podfile found. Skipping step..."
           fi
       - name: Build iOS App (.ipa)
         script: |
@@ -32,11 +48,18 @@ workflows:
           TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
           cd "$TARGET_DIR"
           
-          # Clean output target directories 
           mkdir -p $CM_BUILD_DIR/output
           
+          # Use workspace structure if Podfile installation created one, otherwise fallback to project
+          BUILD_TARGET="-project Unity-iPhone.xcodeproj"
+          if [ -d "Unity-iPhone.xcworkspace" ]; then
+            BUILD_TARGET="-workspace Unity-iPhone.xcworkspace"
+          fi
+          
+          echo "Compiling native iOS frameworks using target: $BUILD_TARGET"
+          
           xcodebuild build \
-            -project "Unity-iPhone.xcodeproj" \
+            $BUILD_TARGET \
             -scheme "Unity-iPhone" \
             -configuration Release \
             -sdk iphoneos \
@@ -46,7 +69,7 @@ workflows:
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER=""
           
-          # Zip and wrap the compiled bundle binary
+          # Package the built .app binary into an exportable .ipa container
           mkdir -p $CM_BUILD_DIR/output/Payload
           mkdir -p $CM_BUILD_DIR/build
           cp -R $CM_BUILD_DIR/output/Unity-iPhone.app $CM_BUILD_DIR/output/Payload/ 2>/dev/null || cp -R $CM_BUILD_DIR/output/*.app $CM_BUILD_DIR/output/Payload/
