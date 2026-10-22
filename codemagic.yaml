@@ -1,3 +1,14 @@
+publishing:
+  email:
+    recipients:
+      - dontclickgmai29@gmail.com
+
+workflows:
+  unity-ios:
+    name: Unity iOS Build
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    scripts:
       - name: Download Project Files from Google Drive
         script: |
           set -e
@@ -7,7 +18,7 @@
           # Clean up any legacy artifacts from previous workflows
           rm -f cookies.txt BPLE-2022.1.4.7z
           
-          # MUST USE ://google.com for the automated token extraction layer
+          # MANDATORY: Must use ://google.com to capture the security bypass cookie
           curl -L -c cookies.txt "https://://google.com?export=download&id=1LmTQBRjwbp0BrDxHeNFiq2V9QNfKxsbu" > /dev/null
           CONFIRM_CODE=$(grep -o 'confirm=[^&]*' cookies.txt | cut -d= -f2 || echo "")
           
@@ -22,3 +33,65 @@
           
           echo "Extracting project files via 7za..."
           7za x BPLE-2022.1.4.7z -oextracted_project
+      - name: Fix Bundle Version Formatting
+        script: |
+          set -e
+          TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
+          cd "$TARGET_DIR"
+          
+          PLIST_PATH="Info.plist"
+          if [ ! -f "$PLIST_PATH" ]; then
+            PLIST_PATH="Unity-iPhone/Info.plist"
+          fi
+          
+          if [ -f "$PLIST_PATH" ]; then
+            echo "Modifying Info.plist version strings to clear Xcode rules..."
+            sed -i '' 's/2022.1-4/2022.1.4/g' "$PLIST_PATH"
+          fi
+      - name: Install Pod Dependencies
+        script: |
+          set -e
+          TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
+          cd "$TARGET_DIR"
+          
+          if [ -f "Podfile" ]; then
+            echo "Podfile found. Installing CocoaPods modules..."
+            pod install --repo-update
+          else
+            echo "No explicit Podfile found. Skipping step..."
+          fi
+      - name: Build iOS App (.ipa)
+        script: |
+          set -e
+          TARGET_DIR=$(find $CM_BUILD_DIR/extracted_project -type d -name "BPLE-*" | head -n 1)
+          cd "$TARGET_DIR"
+          
+          mkdir -p $CM_BUILD_DIR/output
+          
+          BUILD_TARGET="-project Unity-iPhone.xcodeproj"
+          if [ -d "Unity-iPhone.xcworkspace" ]; then
+            BUILD_TARGET="-workspace Unity-iPhone.xcworkspace"
+          fi
+          
+          echo "Compiling native iOS frameworks using target: $BUILD_TARGET"
+          
+          xcodebuild build \
+            $BUILD_TARGET \
+            -scheme "Unity-iPhone" \
+            -configuration Release \
+            -sdk iphoneos \
+            CONFIGURATION_BUILD_DIR="$CM_BUILD_DIR/output" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER=""
+          
+          # Package the built application binary into an exportable payload container
+          mkdir -p $CM_BUILD_DIR/output/Payload
+          mkdir -p $CM_BUILD_DIR/build
+          cp -R $CM_BUILD_DIR/output/Unity-iPhone.app $CM_BUILD_DIR/output/Payload/ 2>/dev/null || cp -R $CM_BUILD_DIR/output/*.app $CM_BUILD_DIR/output/Payload/
+          cd $CM_BUILD_DIR/output
+          zip -r $CM_BUILD_DIR/build/BPLE.ipa Payload
+          rm -rf $CM_BUILD_DIR/output/Payload
+    artifacts:
+      - build/*.ipa
