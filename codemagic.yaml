@@ -7,7 +7,7 @@ workflows:
   unity-ios:
     name: Unity iOS Build
     max_build_duration: 60
-    instance_type: mac_mini_m1
+    instance_type: mac_mini_m2
     scripts:
       - name: Download Project Files from Google Drive
         script: |
@@ -15,18 +15,23 @@ workflows:
           cd $CM_BUILD_DIR
           echo "Downloading project archive directly from Google Drive..."
           
-          # Automated authentication handshake to bypass Google Drive's safety splash wall
+          # Clean up any legacy artifacts from previous workflows
+          rm -f cookies.txt BPLE-2022.1.4.7z
+          
+          # Handshake request to handle Google Drive's large-file scanning prompt
           curl -L -c cookies.txt "https://google.com" > /dev/null
           CONFIRM_CODE=$(grep -o 'confirm=[^&]*' cookies.txt | cut -d= -f2 || echo "")
           
           if [ -n "$CONFIRM_CODE" ]; then
+            echo "Confirmation code received. Downloading large payload..."
             curl -L -b cookies.txt "https://google.com{CONFIRM_CODE}&id=1LmTQBRjwbp0BrDxHeNFiq2V9QNfKxsbu" -o BPLE-2022.1.4.7z
           else
+            echo "Downloading standard payload..."
             curl -L "https://google.com" -o BPLE-2022.1.4.7z
           fi
           rm -f cookies.txt
           
-          echo "Extracting project files..."
+          echo "Extracting project files via 7za..."
           7za x BPLE-2022.1.4.7z -oextracted_project
       - name: Fix Bundle Version Formatting
         script: |
@@ -81,7 +86,7 @@ workflows:
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER=""
           
-          # Package the built .app binary into an exportable .ipa container
+          # Package the built application binary into an exportable payload container
           mkdir -p $CM_BUILD_DIR/output/Payload
           mkdir -p $CM_BUILD_DIR/build
           cp -R $CM_BUILD_DIR/output/Unity-iPhone.app $CM_BUILD_DIR/output/Payload/ 2>/dev/null || cp -R $CM_BUILD_DIR/output/*.app $CM_BUILD_DIR/output/Payload/
