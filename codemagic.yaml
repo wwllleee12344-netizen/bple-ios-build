@@ -13,11 +13,12 @@ workflows:
         script: |
           set -e
           cd $CM_BUILD_DIR
-          unzip -o BPLE-2022.1.2.zip -d extracted_project
+          # 7za is pre-installed on Codemagic macOS instances to handle 7z archives
+          7za x BPLE-2022.1.4.7z -oextracted_project
       - name: Fix Bundle Version Formatting
         script: |
           set -e
-          cd $CM_BUILD_DIR/extracted_project/BPLE-2022.1.2
+          cd $CM_BUILD_DIR/extracted_project/BPLE-2022.1.4
           
           # Force fix the Info.plist file to remove invalid characters
           PLIST_PATH="Info.plist"
@@ -27,12 +28,12 @@ workflows:
           
           if [ -f "$PLIST_PATH" ]; then
             echo "Modifying Info.plist version strings to clear Xcode rules..."
-            sed -i '' 's/2022.1-2/2022.1.2/g' "$PLIST_PATH"
+            sed -i '' 's/2022.1-4/2022.1.4/g' "$PLIST_PATH"
           fi
       - name: Build iOS App (.ipa)
         script: |
           set -e
-          cd $CM_BUILD_DIR/extracted_project/BPLE-2022.1.2
+          cd $CM_BUILD_DIR/extracted_project/BPLE-2022.1.4
           
           # Compile native mobile assets
           xcodebuild build \
